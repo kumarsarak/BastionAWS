@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+    Bastion host task
+
+Parameters:
+
+    EnvironmentType:
+        Description: The environment type
+        Type: String
+
+    CloudFormationBucket:
+        Description: Cloud Formation S3 bucket where templates are located
+        Type: String
+
+    StackDiscriminator:
+        Description: The issue prefix to precede the DNS entry with
+        Type: String
+
+    ServiceName:
+        Description: The service name
+        Type: String
+        Default: bastion-host
+
+    ImageTag:
+        Description: The image tag to deploy
+        Type: String
+
+    ContainerName:
+        Description: Name of the container the load balancer connects to
+        Type: String
+        Default: bastion-host
+
+    ContainerPort:
+        Description: The port the container is listening on
+        Type: String
+        Default: 22
+
+    StackHash:
+        Description: The hash of the inputs for this stack
+        Type: String
+
+Mappings:
+    TripitEnvironments:
+        "904556211056":
+            Name: Legacy Oregon nonprod
+        "850648284768":
+            Name: Oregon nonprod
+        "639292463411":
+            Name: Oregon prod
+        "474551406633":
+            Name: Frankfurt nonprod
+        "305527133722":
+            Name: Frankfurt prod
+        "889612928773":
+            Name: Legacy Ireland nonprod
+        "105429206131":
+            Name: Legacy Ireland prod
+
+Resources:
+
+    TaskRole:
+        Type: AWS::IAM::Role
+        Properties:
+            RoleName: !Sub tripit${StackDiscriminator}-${ServiceName}-task-role
+            AssumeRolePolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                    - Action: sts:AssumeRole
+                      Effect: Allow
+                      Principal:
+                          Service: ecs-tasks.amazonaws.com
+
+    TaskPolicy:
+        Type: AWS::IAM::Policy
+        Properties:
+            PolicyName: !Sub tripit${StackDiscriminator}-${ServiceName}-task-policy
+            Roles:
+                - !Ref TaskRole
+            PolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                    - Effect: Allow
+                      Action:
+                          - ssm:GetParameters
+                      Resource:
+                          -  !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/tripit-${ServiceName}"
+                    - Effect: Allow
+                      Action:
+                          - rds:DescribeDBClusters
+                      Resource: "*"
+                    - Effect: Allow
+                      Action:
+                          - secretsmanager:GetSecret
+                          - secretsmanager:GetSecretValue
+                      Resource:
+                          -  !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*"
+
+    TaskDefinition:
+        Type: AWS::ECS::TaskDefinition
+        Properties:
+            Family: !Sub ${ServiceName}
+            Cpu: 512 # 1024 is 1 CPU
+            Memory: 1024
+            NetworkMode: awsvpc
+            RequiresCompatibilities:
+                - FARGATE
+            ExecutionRoleArn:
+                Fn::ImportValue: !Sub tripit${StackDiscriminator}-ecs-task-execution-role
+            TaskRoleArn: !GetAtt TaskRole.Arn
+            ContainerDefinitions:
+                - Name: !Sub ${ServiceName}
+                  Essential: true
+                  Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/bastion-host:${ImageTag}"
+                  MemoryReservation: 992
+                  Environment:
+                      - Name: AWS_DEFAULT_REGION
+                        Value: !Ref AWS::Region
+                      - Name: AWS_ENVIRONMENT
+                        Value: !Ref EnvironmentType
+                      - Name: TRIPIT_ENVIRONMENT
+                        Value: !FindInMap [ TripitEnvironments, !Ref "AWS::AccountId", Name ]
+                  PortMappings:
+                      - ContainerPort: !Ref ContainerPort
+                  LogConfiguration:
+                      LogDriver: awslogs
+                      Options:
+                          awslogs-group:
+                              Fn::ImportValue: !Sub tripit${StackDiscriminator}-bastion-access-log-group
+                          awslogs-region: !Ref AWS::Region
+                          awslogs-stream-prefix: !Ref ServiceName
+
+    Service:
+        Type: AWS::ECS::Service
+        Properties:
+            Cluster:
+                Fn::ImportValue: !Sub tripit${StackDiscriminator}-ecs-cluster-name
+            ServiceName: !Sub ${ServiceName}
+            LaunchType: FARGATE
+            HealthCheckGracePeriodSeconds: 60
+            DesiredCount: 1
+            TaskDefinition: !Ref TaskDefinition
+            NetworkConfiguration:
+                AwsvpcConfiguration:
+                    AssignPublicIp: DISABLED
+                    SecurityGroups:
+                        - !ImportValue tripit-bastion-host-security-group
+                    Subnets:
+                        Fn::Split:
+                            - ','
+                            - !ImportValue tripit-private-subnets
+            LoadBalancers:
+                - ContainerName: !Ref ContainerName
+                  ContainerPort: !Ref ContainerPort
+                  TargetGroupArn:
+                      Fn::ImportValue: !Sub tripit${StackDiscriminator}-bastion-target-group-arn
+
+Outputs:
+
+    StackHash:
+        Description: The hash of the inputs for this stack
+        Value: !Ref StackHash

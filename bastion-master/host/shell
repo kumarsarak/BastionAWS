@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+export PATH="$PATH:/usr/local/bin"
+
+BASTION_LOG="/tmp/stdout"
+ALLOW_SSH="ssh"
+ALLOW_SCP="scp"
+ALLOW_SSH_KEY_ROTATE="ssh key rotate"
+
+function assert_identity() {
+    if [[ $(whoami) == "tripit" ]] && [[ $SSH_ORIGINAL_COMMAND == *"$ALLOW_SSH_KEY_ROTATE"* ]]; then
+        return
+    fi
+
+    export AWS_DEFAULT_REGION=$(echo $AWS_ENV | awk -F ',' '{print $1}')
+    export AWS_ACCESS_KEY_ID=$(echo $AWS_ENV | awk -F ',' '{print $2}')
+    export AWS_SECRET_ACCESS_KEY=$(echo $AWS_ENV | awk -F ',' '{print $3}')
+    export AWS_SESSION_TOKEN=$(echo $AWS_ENV | awk -F ',' '{print $4}')
+    unset AWS_ENV
+
+    local userid=$(aws sts get-caller-identity | jq -r ".UserId")
+    local user=$(echo $userid | awk -F ':' '{print $2}' | awk -F"@" '{print $1}')
+    if [[ "${user,,}" != "$(whoami)" ]]; then
+        echo -e 'ERROR: AWS user and bastion user do not match!'
+        exit 1
+    fi
+}
+
+
+function main() {
+    if [[ -z $SSH_ORIGINAL_COMMAND ]] ||
+       [[ $SSH_ORIGINAL_COMMAND =~ ^$ALLOW_SSH ]] ||
+       [[ $SSH_ORIGINAL_COMMAND =~ ^$ALLOW_SCP ]] ||
+       [[ $SSH_ORIGINAL_COMMAND == *"$ALLOW_SSH_KEY_ROTATE"* ]]; then
+
+        # Interactive session
+        if [[ -z "$SSH_ORIGINAL_COMMAND" ]]; then
+            cat /etc/motd
+            /bin/bash -l
+            exit 0
+        fi
+
+
+        # SSH or SCP command provided
+        eval $SSH_ORIGINAL_COMMAND
+        meta_data="$(whoami):$(date '+%Y-%m-%d %H:%M:%S')"
+        log_line="${meta_data}:${SSH_ORIGINAL_COMMAND}"
+        echo "${log_line}" >> "${BASTION_LOG}"
+        exit 0
+
+    else
+        echo "This bastion supports interactive sessions only. Do not supply a command"
+        exit 1
+    fi
+}
+
+assert_identity
+main

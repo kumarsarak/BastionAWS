@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+    Creates the bastion resources
+
+Parameters:
+
+    EnvironmentType:
+        Description: The environment type
+        Type: String
+
+    CloudFormationBucket:
+        Description: Cloud Formation S3 bucket where templates are located
+        Type: String
+
+    StackDiscriminator:
+        Description: The issue prefix to precede the table names with
+        Type: String
+
+    StackHash:
+        Description: The hash of the inputs for this stack
+        Type: String
+
+Resources:
+
+    AccessLogGroup:
+        Type: AWS::Logs::LogGroup
+        Properties:
+            LogGroupName: !Sub tripit${StackDiscriminator}-bastion.access
+            RetentionInDays: 400
+
+    NetworkLoadBalancer:
+        Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+        Properties:
+            Name: !Sub tripit${StackDiscriminator}-bastion
+            Subnets:
+                Fn::Split:
+                    - ","
+                    - !ImportValue tripit-public-subnets
+            Type: network
+
+    TargetGroup:
+        Type: AWS::ElasticLoadBalancingV2::TargetGroup
+        Properties:
+            Name: !Sub tripit${StackDiscriminator}-bastion-hosts
+            VpcId: !ImportValue tripit-vpc
+            Port: 22
+            Protocol: TCP
+            TargetType: ip
+            HealthCheckProtocol: TCP
+            HealthCheckPort: 22
+
+    ListenerRule:
+        Type: AWS::ElasticLoadBalancingV2::Listener
+        Properties:
+            DefaultActions:
+                - Type: forward
+                  TargetGroupArn: !Ref TargetGroup
+            LoadBalancerArn: !Ref NetworkLoadBalancer
+            Port: 22
+            Protocol: TCP
+
+    BastionDNSRecord:
+        Type: AWS::Route53::RecordSet
+        Properties:
+            Comment: Service DNS record
+            HostedZoneId: !ImportValue tripit-jurisdiction-hosted-zone-id
+            Name: !Join [ "", [ !Sub "bastion${StackDiscriminator}.", !ImportValue tripit-jurisdiction-domain-name ] ]
+            SetIdentifier: !Sub tripit${StackDiscriminator}
+            Type: "CNAME"
+            TTL: "30"
+            Weight: 100
+            ResourceRecords:
+                - !GetAtt NetworkLoadBalancer.DNSName
+
+Outputs:
+
+    AccessLogGroupName:
+        Description: Bastion access log group name
+        Value: !Ref AccessLogGroup
+        Export:
+            Name: !Sub tripit${StackDiscriminator}-bastion-access-log-group
+
+    TargetGroupArn:
+        Description: Target group arn
+        Value: !Ref TargetGroup
+        Export:
+            Name: !Sub tripit${StackDiscriminator}-bastion-target-group-arn
+
+    NetworkLoadBalancer:
+        Description: Arn of the NLB
+        Value: !Ref NetworkLoadBalancer
+        Export:
+            Name: !Sub tripit${StackDiscriminator}-bastion-load-balancer-group-arn
+
+    StackHash:
+        Description: The hash of the inputs for this stack
+        Value: !Ref StackHash

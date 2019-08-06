@@ -1,0 +1,4 @@
+#Added by Linux bastion bootstrap
+declare -rx IP=$(echo $SSH_CLIENT | awk '{print $1}')
+declare -rx BASTION_LOG='/tmp/stdout'
+declare -rx PROMPT_COMMAND='echo "[ON]:$(date)   [FROM]:${IP}   [USER]:${USER}   [PWD]:${PWD}: $(history 1)" >> ${BASTION_LOG}'

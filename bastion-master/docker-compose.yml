@@ -1,0 +1,10 @@
+version: '3.1'
+services:
+  bastion:
+    build:
+      context: ./host
+    image: bastion:latest
+    environment:
+      - TRIPIT_ENVIRONMENT=development
+    ports:
+      - "0.0.0.0:2222:22"
